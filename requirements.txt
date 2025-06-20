@@ -42,4 +42,11 @@ tzdata==2025.2
 urllib3==2.2.2
 watchdog==6.0.0
 meteostat==1.6.3
+streamlit>=1.32
+matplotlib>=3.8
+pandas>=2.2
+numpy>=1.24
+requests>=2.31
+meteostat>=1.6       # optional – comment out if you don't need the fallback
+python-dateutil>=2.9
 
