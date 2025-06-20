@@ -54,15 +54,22 @@ st.markdown(
 
 # ---------- global Matplotlib theme ----------
 mpl.rcParams.update({
-    "font.family": "sans-serif",
+    "font.family"   : "sans-serif",
     "font.sans-serif": ["Inter"],
+
+    # colour cycle & faces …
     "axes.prop_cycle": mpl.cycler(color=["#1a73e8", "#ea4335", "#34a853", "#fbbc05"]),
     "axes.facecolor": "none",
-    "figure.facecolor": "none",      # ← new
-    "savefig.facecolor": "none",     # ← new
-    "axes.labelsize": 14,
-})
+    "figure.facecolor": "none",
+    "savefig.facecolor": "none",
 
+    # >>>  MAKE THEM BIGGER  <<<
+    "axes.titlesize" : 18,      # figure titles  (if you use ax.set_title)**
+    "axes.labelsize" : 16,      # x/y-axis labels**
+    "xtick.labelsize": 14,      # tick numbers**
+    "ytick.labelsize": 14,
+
+})
 # ---------- extra modern-look tweaks ----------
 mpl.rcParams.update({
     # grids & ticks
@@ -213,6 +220,12 @@ def fetch_met_office_today():
 
         # Build DataFrame
         df = pd.DataFrame(records)
+
+        # guarantee schema even when records == []
+        for col, dtype in {"time": "datetime64[ns]", "vpd": "float64"}.items():
+            if col not in df.columns:
+                df[col] = pd.Series(dtype=dtype)
+
         return df
 
     except requests.exceptions.RequestException as e:
@@ -293,7 +306,7 @@ def fetch_historical_data(lat, lon, start_date, end_date):
     """Fetch hourly temperature & humidity from Open-Meteo, then compute VPD."""
     url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
-        'latitude': lat,
+        'latitude': lat,    
         'longitude': lon,
         'start_date': start_date,
         'end_date': end_date,
@@ -575,7 +588,13 @@ st.markdown(
 # --- Hourly VPD ---
 if day_sel > date.today():
     df_today = fetch_met_office_forecast()
-    df_today = df_today[ df_today["time"].dt.date == day_sel ]   # ← NEW
+
+    # 🛡️ make sure the columns exist even if the frame is empty
+    for col, dtype in {"time": "datetime64[ns]", "vpd": "float64"}.items():
+        if col not in df_today.columns:
+            df_today[col] = pd.Series(dtype=dtype)
+
+    df_today = df_today[df_today["time"].dt.date == day_sel]   # safe now
     title    = f"Forecasted Hourly VPD for {day_sel:%Y-%m-%d}"
 elif day_sel == date.today():
     df_today = fetch_met_office_today()
@@ -654,7 +673,9 @@ else:
                      datetime.combine(day_sel, datetime.max.time())])
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M\n%d/%m'))
-    ax.set_xlabel('Time'); ax.set_ylabel('VPD (Pa)'); ax.grid(True)
+    ax.set_xlabel('Time',  fontsize=16)
+    ax.set_ylabel('VPD (Pa)', fontsize=16)
+    ax.tick_params(axis='both', labelsize=14)   # ticks
     st.pyplot(fig)
 
 
@@ -690,7 +711,9 @@ with col3:
     ax2.axhline(THRESHOLD, color='red', linestyle='--')
     ax2.set_xticks(range(len(avg)))
     ax2.set_xticklabels([d.strftime('%d/%m') for d in pd.date_range(start, end)], rotation=0)
-    ax2.set_xlabel('Day'); ax2.set_ylabel('VPD (Pa)'); ax2.grid(True)
+    ax2.set_xlabel('Day',  fontsize=16)
+    ax2.set_ylabel('VPD (Pa)', fontsize=16)
+    ax2.tick_params(axis='both', labelsize=14)   # ticks
     st.pyplot(fig2)
 with col4:
     for d, v in zip(pd.date_range(start, end), avg):
