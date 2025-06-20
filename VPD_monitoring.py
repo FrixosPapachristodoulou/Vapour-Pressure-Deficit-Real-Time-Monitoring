@@ -16,6 +16,14 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime, timedelta, date
 import requests
+import matplotlib as mpl
+
+st.set_page_config(
+    page_title="VPD Monitor",
+    page_icon="🌡️",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
 
 # Optional Meteostat fallback
 import numpy as np
@@ -28,15 +36,101 @@ try:
 except ImportError:
     METEOSTAT_AVAILABLE = False
 
-# --- CSS Styling ---
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
-html, body, [class*=\"css\"] { font-family: 'Roboto', sans-serif; }
-.section-title { font-size:18px; font-weight:bold; text-align:left; padding-bottom:3px; margin-bottom:0; display:flex; align-items:center; }
-.section-title:after { content:\"\"; flex:1; margin-left:10px; border-bottom:2px solid #000; }
-</style>
-""", unsafe_allow_html=True)
+# =====================================================
+#                  ✨  LOOK & FEEL  ✨
+# =====================================================
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+    .section-title { font-size:18px; font-weight:500; display:flex; align-items:center; }
+    .section-title:after { content:""; flex:1; margin-left:10px; border-bottom:2px solid #000; }
+    .stDateInput label { font-size:18px; font-weight:500; } 
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------- global Matplotlib theme ----------
+mpl.rcParams.update({
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Inter"],
+    "axes.prop_cycle": mpl.cycler(color=["#1a73e8", "#ea4335", "#34a853", "#fbbc05"]),
+    "axes.facecolor": "none",
+    "figure.facecolor": "none",      # ← new
+    "savefig.facecolor": "none",     # ← new
+    "axes.labelsize": 14,
+})
+
+# ---------- extra modern-look tweaks ----------
+mpl.rcParams.update({
+    # grids & ticks
+    "axes.grid"       : True,
+    "grid.color"      : "#d0d0d0",
+    "grid.linestyle"  : "--",
+    "grid.linewidth"  : 0.6,
+    "axes.spines.right": False,      # hide heavy borders
+    "axes.spines.top" : False,
+    "xtick.major.size": 0,           # no heavy ticks
+    "ytick.major.size": 0,
+
+    # lines / markers
+    "lines.linewidth" : 2.25,
+    "lines.markersize": 6,
+
+    # padding
+    "figure.autolayout": True,       # tight-layout everywhere
+})
+
+
+# ---------- Dark-mode toggle ----------
+dark = st.sidebar.toggle("🌙  Dark mode", key="dark_mode")
+st.sidebar.markdown("<hr>", unsafe_allow_html=True)
+st.sidebar.caption("⚙️  Adjust view options")
+if dark:
+    st.markdown(
+        """
+        <style>
+        /* ───────── existing dark-mode rules … ───────── */
+        body, .stApp              { background:#202124;  color:#e8eaed; }
+        .stMarkdown div           { color:#e8eaed !important; }
+        .stDateInput label        { color:#e8eaed !important; }
+        .section-title            { color:#e8eaed !important; }
+        .section-title:after      { border-bottom:2px solid #e8eaed !important; }
+
+        /* --- DOWNLOAD-BUTTON : DARK THEME ---------------------------------- */
+        /* outer <a> that really owns the background ------------------------- */
+        div[data-testid="stDownloadButton"] > a{
+            display:block;                 /* let the border span full width  */
+            width:100%;
+            background:transparent !important;   /* kill the white fill      */
+            border:1px solid #8ab4f8 !important; /* same blue you chose       */
+            color:#8ab4f8 !important;
+            font-weight:600;
+            border-radius:6px;
+            padding:0.4rem 0.75rem;        /* little breathing-space          */
+            text-align:center;             /* keep label centred              */
+            transition:background .15s ease,color .15s ease;
+        }
+        div[data-testid="stDownloadButton"] > a:hover{
+            background:#8ab4f8 !important; /* blue on hover                   */
+            color:#202124 !important;      /* readable foreground             */
+        }
+
+        /* inner <button> – strip any residual styling ---------------------- */
+        div[data-testid="stDownloadButton"] button{
+            all:unset;                     /* wipe Streamlit’s default rules  */
+        }
+
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    # ── NEW (keep the import line together with the call) ──────────────────
+    import matplotlib.colors as _mcol
+    _mcol.get_named_colors_mapping()['green'] = '#34c759'   # brighter green
+    # ────
 
 # --- Constants ---
 LATITUDE = 51.56
@@ -328,7 +422,17 @@ def plot_daily_dashed(ax, idxs, vals):
                 ax.plot([cross, k], [THRESHOLD, y1], '--', linewidth=2, color='green')
 
 # --- App UI ---
-st.markdown("<h2 style='text-align:center;font-size:24px;'>Vapour Pressure Deficit (VPD) Monitoring</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align:center;font-size:24px;'>Vapour Pressure Deficit Monitoring</h2>", unsafe_allow_html=True)
+
+st.markdown(
+    "<p style='text-align:center; margin-top:-0.3rem; color:#5f6368; "
+    "font-size:0.9rem;'>"
+    "All figures relate to <b>Greater London (Northolt synoptic site, "
+    "51.56 °N, 0.36 °W)</b>. Values elsewhere will differ."
+    "</p>",
+    unsafe_allow_html=True,
+)
+
 
 # Date picker
 day_sel = st.date_input(
@@ -436,6 +540,16 @@ def mean_vpd_for_day(d: date) -> float | None:
     return None
 
 
+def _darken_axes(ax):
+    """Paint axes, ticks and grid white so they pop on a dark canvas."""
+    ax.tick_params(colors="white", which="both")            # ticks
+    ax.xaxis.label.set_color("white")
+    ax.yaxis.label.set_color("white")
+    ax.grid(color="white", alpha=0.15)                      # gridlines
+    # 4 spines
+    for spine in ax.spines.values():
+        spine.set_color("white")
+
 
 # Build the 10-element list, oldest → newest
 avg   = [mean_vpd_for_day(d) for d in rng]
@@ -449,21 +563,13 @@ bc, bb, bt = (
 
 st.markdown(
     f"""
-    <div style='border:1px solid {bc};padding:5px;background-color:{bb};color:{bc};
+    <div style='border:1.5px solid {bc};border-radius:7px;padding:5px;background-color:{bb};color:{bc};
                font-weight:bold;text-align:center;margin:10px 0;'>
       {bt} – {consec}/10 days above {THRESHOLD} Pa
     </div>
     """,
     unsafe_allow_html=True,
 )
-
-
-
-
-
-
-
-
 
 
 # --- Hourly VPD ---
@@ -521,17 +627,23 @@ df_fill = _df_fill_marker
 # Use filled DataFrame for plotting
 df_today = filled
 
+
+
+
 # Plot hourly full-width
 st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
 if df_today.empty or 'time' not in df_today.columns or 'vpd' not in df_today.columns:
     st.warning('Not enough data for selected day.')
 else:
     fig, ax = plt.subplots(figsize=(14,6))
+    if dark:                       # new  ➜ only in dark-mode
+        fig.patch.set_alpha(0)     # make hourly-plot canvas transparent
+        _darken_axes(ax)
     ax.set_ylim(0, 3500)
     times = list(df_today['time'])
     vals  = list(df_today['vpd'])
     plot_colored_lines(ax, times, vals)
-    ax.scatter(times, vals, c=[('green' if v<THRESHOLD else 'red') for v in vals], s=30, zorder=5)
+    ax.scatter(times, vals, c=[('#34a853' if v < THRESHOLD else '#ea4335') for v in vals], s=60, linewidths=0.4, edgecolors="#ffffff", zorder=5)
     ax.axhline(THRESHOLD, color='red', linestyle='--')
 
     if day_sel == date.today():                 # today → stop at current time
@@ -545,11 +657,26 @@ else:
     ax.set_xlabel('Time'); ax.set_ylabel('VPD (Pa)'); ax.grid(True)
     st.pyplot(fig)
 
+
+if not df_today.empty:
+    csv_bytes = df_today.to_csv(index=False).encode()
+    st.download_button(
+        "📥  Download this day as CSV",
+        csv_bytes,
+        file_name=f"vpd_{day_sel}.csv",
+        mime="text/csv",
+        help="Export the filled hourly VPD table for the selected day",
+        use_container_width=True,          # ← NEW: full-width like the charts
+    )
+    
 # --- Daily VPD ---
 st.markdown("<div class='section-title'>Average Daily VPD (Last 10 Days)</div>", unsafe_allow_html=True)
 col3, col4 = st.columns([2,1])
 with col3:
     fig2, ax2 = plt.subplots(figsize=(10,6))
+    if dark:                       # new  ➜ only in dark-mode
+        fig2.patch.set_alpha(0)    # make 10-day plot canvas transparent
+        _darken_axes(ax2)
     # idxs = [i for i, v in enumerate(avg) if v is not None]
     # vals = [v for v in avg if v is not None]
 
@@ -559,7 +686,7 @@ with col3:
     plot_daily_dashed(ax2, idxs, vals)
     for i, v in enumerate(avg):
         if v is None: continue
-        ax2.scatter(i, v, s=50, color=('green' if v<THRESHOLD else 'red'))
+        ax2.scatter(i, v, s=60, c=('#34a853' if v < THRESHOLD else '#ea4335'), linewidths=0.4, edgecolors="#ffffff", zorder=5)
     ax2.axhline(THRESHOLD, color='red', linestyle='--')
     ax2.set_xticks(range(len(avg)))
     ax2.set_xticklabels([d.strftime('%d/%m') for d in pd.date_range(start, end)], rotation=0)
@@ -581,9 +708,25 @@ with col4:
 
 # Footer
 st.markdown(
-    f"<div style='border:1px solid darkgreen; padding:5px; background-color:rgba(0,128,0,0.1); color:darkgreen; font-weight:bold;text-align:center; margin-top:10px;'>"
+    f"<div style='border:1.5px solid darkgreen; border-radius:7px; padding:5px; background-color:rgba(0,128,0,0.1); color:darkgreen; font-weight:bold;text-align:center; margin-top:10px;'>"
     f"Data loaded for {start} to {end}." 
     "</div>",
     unsafe_allow_html=True
 )
 
+st.markdown(
+    "<div style='font-size:0.8rem; text-align:center; color:grey; "
+    "margin-top:1.2rem;'>"
+    "Regional scope: VPD derived for the Northolt station &mdash; representative "
+    "of London’s climate.</div>",
+    unsafe_allow_html=True,
+)
+
+
+st.markdown(
+    '<hr style="margin-top:3rem;">'
+    '<div style="font-size:0.8rem;text-align:center;color:grey">'
+    'Built with Streamlit • Data © Met Office / Open-Meteo / Meteostat'
+    '</div>',
+    unsafe_allow_html=True,
+)
