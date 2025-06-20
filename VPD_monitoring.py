@@ -335,51 +335,141 @@ day_sel = st.date_input(
     'Select day:',
     value=date.today(),
     min_value=date.today() - timedelta(days=HIST_DAYS),
-    max_value=date.today() + timedelta(days=MAX_FORECAST_DAYS)
+    max_value=date.today() + timedelta(days=MAX_FORECAST_DAYS),
+    key='main_day_picker'
 )
 start = day_sel - timedelta(days=HIST_DAYS)
 end   = day_sel
 
-# Historical daily averages & firewave banner
-hist_end = min(end, date.today() - timedelta(days=1))  # Exclude today - only past dates
 
-# Only fetch historical data if we have past dates to fetch
-if hist_end >= start:
-    df_hist = fetch_historical_data(LATITUDE, LONGITUDE, start.isoformat(), hist_end.isoformat())
+
+
+
+# ---- DAILY-MEAN VPD FOR A 10-DAY WINDOW ENDING ON *day_sel* ----
+WINDOW = 10
+rng = [day_sel - timedelta(days=i) for i in range(WINDOW - 1, -1, -1)]  # oldest → newest
+
+# # Pull forecast once (only if the window reaches into the future)
+# forecast_df = (
+#     fetch_met_office_forecast()
+#     if max(rng) > date.today()
+#     else pd.DataFrame(columns=["time", "vpd"])
+# )
+# if not forecast_df.empty:
+#     forecast_df["time"] = pd.to_datetime(forecast_df["time"])
+#     forecast_df["day"]  = forecast_df["time"].dt.date
+
+
+# Pull the 3-hour forecast once (only if the window reaches into the future)
+forecast_df = (
+    fetch_met_office_forecast()
+    if max(rng) > date.today()
+    else pd.DataFrame(columns=["time", "vpd"])
+)
+
+# Always create the helper columns, even for an empty frame
+# forecast_df["time"] = pd.to_datetime(forecast_df.get("time"), errors="coerce")
+# forecast_df["day"]  = forecast_df["time"].dt.date
+
+# make sure the column exists and is datetime64               <— NEW
+if "time" not in forecast_df.columns:
+    forecast_df["time"] = pd.Series(dtype="datetime64[ns]")
+
+forecast_df["time"] = pd.to_datetime(forecast_df["time"], errors="coerce")
+forecast_df["day"]  = forecast_df["time"].dt.date
+
+today_ = date.today()
+forecast_df = forecast_df[forecast_df["day"] > today_]
+
+# --- NEW: guarantee the forecast frame always has a vpd column -------------
+if "vpd" not in forecast_df.columns:
+    forecast_df["vpd"] = pd.Series(dtype="float64")
+# ---------------------------------------------------------------------------
+
+forecast_means = (
+    forecast_df.groupby("day")["vpd"].mean()   # safe now: vpd always exists
+    .dropna()                                  # remove NaNs if any
+    .to_dict()
+)
+
+
+
+def mean_vpd_for_day(d: date) -> float | None:
+    """Return the daily-mean VPD for *d*, or None if we really have no data."""
+    if d < date.today():                                # ← past
+        df = fetch_historical_data(LATITUDE, LONGITUDE, d.isoformat(), d.isoformat())
+        df = fill_missing_with_meteostat(df, d)
+        return None if df.empty else df["vpd"].mean()
+
+    if d == date.today():                               # ← today
+        df = fetch_met_office_today()
+        df = fill_missing_with_meteostat(df, d)
+        return None if df.empty else df["vpd"].mean()
+
+    # ---------- future days ----------
+    # Slice the forecast we already have:
+    # slice_ = forecast_df[forecast_df["day"] == d]
+    # return None if slice_.empty else slice_["vpd"].mean()
+
+    # ---------- future days ----------
     
-    # Fill missing data for each historical day with Meteostat
-    filled_historical_data = []
-    for single_date in pd.date_range(start, hist_end):
-        day_data = df_hist[df_hist['time'].dt.date == single_date.date()]
-        filled_day_data = fill_missing_with_meteostat(day_data, single_date.date())
-        if not filled_day_data.empty:
-            filled_historical_data.append(filled_day_data)
     
-    # Combine all filled historical data
-    if filled_historical_data:
-        df_hist_filled = pd.concat(filled_historical_data, ignore_index=True)
-    else:
-        df_hist_filled = pd.DataFrame(columns=['time','vpd'])
-else:
-    # No historical data to fetch (all dates are today or future)
-    df_hist_filled = pd.DataFrame(columns=['time','vpd'])
+    # ---------- future days ----------
+    # 1) fast path – use the dictionary we just built
+    if d in forecast_means:
+        return forecast_means[d]
 
-# Calculate daily averages from the filled data (including Meteostat points)
-# For today/future dates, we won't have historical averages, so they'll be None
-daily = df_hist_filled.set_index('time')['vpd'].resample('D').mean().reindex(pd.date_range(start, end), fill_value=None) if not df_hist_filled.empty else pd.Series([None] * (end - start).days, index=pd.date_range(start, end, periods=(end - start).days))
-avg = [None if pd.isna(x) else x for x in daily]
+    # 2) slow path – slice the one-shot forecast dataframe
+    slice_ = forecast_df[forecast_df["day"] == d]
+    if not slice_.empty:
+        val = slice_["vpd"].mean()
+        return None if pd.isna(val) else val
 
+    # 3) last-resort – pull the forecast again (rare)
+    fresh = fetch_met_office_forecast()
+    if not fresh.empty:
+        fresh["time"] = pd.to_datetime(fresh["time"], errors="coerce")
+        fresh["day"]  = fresh["time"].dt.date
+        val = fresh[fresh["day"] == d]["vpd"].mean()
+        return None if pd.isna(val) else val
+
+    return None
+
+
+
+# Build the 10-element list, oldest → newest
+avg   = [mean_vpd_for_day(d) for d in rng]
 consec = count_consecutive_days(avg)
-bc, bb, bt = ('darkred','rgba(255,0,0,0.1)','Firewave Predicted') if consec>=10 else ('darkgreen','rgba(0,128,0,0.1)','No Firewave Predicted')
-st.markdown(f"""
-<div style='border:1px solid {bc};padding:5px;background-color:{bb};color:{bc};font-weight:bold;text-align:center;margin:10px 0;'>
-  {bt} – {consec}/10 days above {THRESHOLD} Pa
-</div>
-""", unsafe_allow_html=True)
+
+bc, bb, bt = (
+    ("darkred",  "rgba(255,0,0,0.1)", "Firewave Predicted")
+    if consec >= 10 else
+    ("darkgreen","rgba(0,128,0,0.1)", "No Firewave Predicted")
+)
+
+st.markdown(
+    f"""
+    <div style='border:1px solid {bc};padding:5px;background-color:{bb};color:{bc};
+               font-weight:bold;text-align:center;margin:10px 0;'>
+      {bt} – {consec}/10 days above {THRESHOLD} Pa
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+
+
+
+
+
+
 
 # --- Hourly VPD ---
 if day_sel > date.today():
     df_today = fetch_met_office_forecast()
+    df_today = df_today[ df_today["time"].dt.date == day_sel ]   # ← NEW
     title    = f"Forecasted Hourly VPD for {day_sel:%Y-%m-%d}"
 elif day_sel == date.today():
     df_today = fetch_met_office_today()
@@ -399,6 +489,11 @@ df_open = df_today.copy()
 
 # Fill missing hours via Meteostat
 filled = fill_missing_with_meteostat(df_open, day_sel)
+
+# NEW: for *today* keep only data points up to the current time
+if day_sel == date.today():
+    now = datetime.now()
+    filled = filled[filled["time"] <= now]
 
 # Determine which rows came from Meteostat
 # --- Show full Meteostat pull regardless of what was filled ---
@@ -438,7 +533,14 @@ else:
     plot_colored_lines(ax, times, vals)
     ax.scatter(times, vals, c=[('green' if v<THRESHOLD else 'red') for v in vals], s=30, zorder=5)
     ax.axhline(THRESHOLD, color='red', linestyle='--')
-    ax.set_xlim([datetime.combine(day_sel, datetime.min.time()), datetime.combine(day_sel, datetime.max.time())])
+
+    if day_sel == date.today():                 # today → stop at current time
+        ax.set_xlim([datetime.combine(day_sel, datetime.min.time()),
+                     datetime.now()])
+    else:                                       # any other day → full 24 h
+        ax.set_xlim([datetime.combine(day_sel, datetime.min.time()),
+                     datetime.combine(day_sel, datetime.max.time())])
+
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M\n%d/%m'))
     ax.set_xlabel('Time'); ax.set_ylabel('VPD (Pa)'); ax.grid(True)
     st.pyplot(fig)
@@ -448,8 +550,12 @@ st.markdown("<div class='section-title'>Average Daily VPD (Last 10 Days)</div>",
 col3, col4 = st.columns([2,1])
 with col3:
     fig2, ax2 = plt.subplots(figsize=(10,6))
-    idxs = [i for i, v in enumerate(avg) if v is not None]
-    vals = [v for v in avg if v is not None]
+    # idxs = [i for i, v in enumerate(avg) if v is not None]
+    # vals = [v for v in avg if v is not None]
+
+    idxs = [i for i, v in enumerate(avg) if v is not None and not pd.isna(v)]
+    vals = [v for v in avg if v is not None and not pd.isna(v)]
+
     plot_daily_dashed(ax2, idxs, vals)
     for i, v in enumerate(avg):
         if v is None: continue
@@ -461,9 +567,16 @@ with col3:
     st.pyplot(fig2)
 with col4:
     for d, v in zip(pd.date_range(start, end), avg):
-        label = f"{d:%Y-%m-%d}: {v:.1f} Pa" if v is not None else f"{d:%Y-%m-%d}: No data"
-        color = 'green' if v is not None and v<THRESHOLD else ('red' if v is not None else 'gray')
-        st.markdown(f"<div style='color:{color};font-weight:bold;text-align:center;'>{label}</div>", unsafe_allow_html=True)
+        if v is None or pd.isna(v):
+            label = f"{d:%Y-%m-%d}: No data"
+            color = "gray"
+        else:
+            label = f"{d:%Y-%m-%d}: {v:.1f} Pa"
+            color = "green" if v < THRESHOLD else "red"
+        st.markdown(
+            f"<div style='color:{color};font-weight:bold;text-align:center;'>{label}</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # Footer
