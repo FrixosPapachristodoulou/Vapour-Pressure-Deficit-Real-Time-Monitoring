@@ -1184,6 +1184,86 @@ with st.expander("📍 Station inventory", expanded=False):
     )
 
 
+
+# ─────────────────────────────────────────────────────────────────────
+# 📍 LIVE STATION MAP – 143 markers, spinner + progress bar, built once
+# --------------------------------------------------------------------
+import pydeck as pdk
+
+st.markdown("<div class='section-title'>Live station map</div>",
+            unsafe_allow_html=True)
+
+# Do we have to rebuild the deck object?
+needs_build = (
+    "station_map_deck" not in st.session_state or
+    st.session_state.get("station_map_dark") != dark
+)
+
+# ------------------------------------------------------------------ #
+#  A.  build (only if needed)  –  shows progress bar
+# ------------------------------------------------------------------ #
+if needs_build:
+    progress = st.progress(0.0)
+    status   = st.empty()
+
+    rows, total = [], len(STATIONS)
+    for i, (name, meta) in enumerate(STATIONS.items(), 1):
+        rows.append({
+            "name"     : name,
+            "met_id"   : meta["dp_id"],
+            "latitude" : meta["lat"],
+            "longitude": meta["lon"],
+        })
+        if i == 1 or i == total or i % 15 == 0:
+            status.text(f"Placing markers … {i}/{total}")
+        progress.progress(i / total)
+
+    stations = pd.DataFrame(rows)
+    MARKER   = [32, 150, 255, 230]                    # blue dot
+    HALO     = [0, 0, 0, 255] if not dark else [255, 255, 255, 255]
+
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        stations,
+        get_position=["longitude", "latitude"],
+        get_fill_color=MARKER,
+        get_radius=400, radius_min_pixels=5,
+        stroked=True, line_width_min_pixels=1,
+        get_line_color=HALO,
+        pickable=True,
+    )
+
+    deck = pdk.Deck(
+        layers=[layer],
+        initial_view_state=dict(latitude=51.507, longitude=-0.128,
+                                zoom=8.6, pitch=0, bearing=0),
+        map_style=("mapbox://styles/mapbox/light-v11"
+                   if not dark else
+                   "mapbox://styles/mapbox/dark-v11"),
+        tooltip={"html": (
+            "<b>{name}</b><br/>"
+            "Met Office ID: {met_id}<br/>"
+            "Lat/Lon: {latitude}, {longitude}"
+        )}
+    )
+
+    st.session_state["station_map_deck"] = deck
+    st.session_state["station_map_dark"] = dark
+    progress.empty(); status.empty()
+
+# ------------------------------------------------------------------ #
+#  B.  *Display* the map – wrap in spinner so user sees activity
+# ------------------------------------------------------------------ #
+map_placeholder = st.empty()           # where the map will appear
+
+with st.spinner("Loading interactive map …"):
+    map_placeholder.pydeck_chart(
+        st.session_state["station_map_deck"],
+        use_container_width=True,
+    )
+
+
+
 #  Date picker
 picked = st.date_input(
     "Select day:",
@@ -1261,97 +1341,6 @@ with st.expander("🧾  Raw readings for every station on this day", expanded=Fa
             use_container_width=True,
         )
 
-
-
-# ──────────────────────────────────────────────────────────────────────
-# 📍 LIVE STATION MAP – 143 markers, progress bar, built only once
-# ---------------------------------------------------------------------
-import pydeck as pdk
-
-st.markdown("<div class='section-title'>Live station map</div>",
-            unsafe_allow_html=True)
-
-# ------------------------------------------------------------------ #
-#  Decide whether a rebuild is needed
-# ------------------------------------------------------------------ #
-needs_map = (
-    "station_map_deck" not in st.session_state      # first run
-    or st.session_state.get("station_map_dark") != dark   # dark-mode toggled
-)
-
-if needs_map:
-    # 0️⃣  Visual feedback widgets
-    progress = st.progress(0.0)
-    status   = st.empty()
-
-    # 1️⃣  Assemble one row per station (iterate so we can update progress)
-    rows, total = [], len(STATIONS)
-    for i, (name, meta) in enumerate(STATIONS.items(), 1):
-        rows.append({
-            "name"     : name,
-            "met_id"   : meta["dp_id"],
-            "latitude" : meta["lat"],
-            "longitude": meta["lon"],
-        })
-        # cheap but effective “loading … n/143” line
-        if i == 1 or i == total or i % 15 == 0:
-            status.text(f"Placing markers … {i}/{total}")
-        progress.progress(i / total)
-
-    stations_df = pd.DataFrame(rows)
-
-    # 2️⃣  Layer (single colour + 1-px halo so markers pop)
-    MARKER_COLOUR = [32, 150, 255, 230]            # bright blue, 90 % alpha
-    HALO_COLOUR   = [0, 0, 0, 255] if not dark else [255, 255, 255, 255]
-
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        stations_df,
-        get_position=["longitude", "latitude"],
-        get_fill_color=MARKER_COLOUR,
-        get_radius=400,               # ≈ 400 m on-screen
-        radius_min_pixels=5,
-        stroked=True,
-        line_width_min_pixels=1,
-        get_line_color=HALO_COLOUR,
-        pickable=True,
-    )
-
-    # 3️⃣  Build deck object & stash in session_state
-    deck_obj = pdk.Deck(
-        layers=[layer],
-        initial_view_state=dict(
-            latitude=51.507, longitude=-0.128,
-            zoom=8.6, pitch=0, bearing=0
-        ),
-        map_style=("mapbox://styles/mapbox/light-v11"
-                   if not dark else
-                   "mapbox://styles/mapbox/dark-v11"),
-        tooltip={
-            "html": (
-                "<b>{name}</b><br/>"
-                "Met Office ID: {met_id}<br/>"
-                "Lat/Lon: {latitude}, {longitude}"
-            ),
-            "style": {"backgroundColor": "white",
-                      "color": "black",
-                      "fontSize": "12px"},
-        },
-    )
-
-    st.session_state["station_map_deck"] = deck_obj
-    st.session_state["station_map_dark"] = dark
-
-    # 4️⃣  tidy up widgets
-    progress.empty(); status.empty()
-
-# ------------------------------------------------------------------ #
-#  Show cached map (fast – no rebuild on date selection)
-# ------------------------------------------------------------------ #
-st.pydeck_chart(
-    st.session_state["station_map_deck"],
-    use_container_width=True,
-)
 
 
 
