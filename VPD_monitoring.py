@@ -301,16 +301,12 @@ _STATION_TSV = textwrap.dedent("""\
     Lewisham	352275	51.463	-0.0076	3781
     London	352409	51.5081	-0.1248	3779
     London  Olympic Park North	99204	51.542	-0.017	3779
-    London Ashford Airport	352410	50.9516	0.9454	3882
     London Biggin Hill Airport	352411	51.3264	0.0322	3882
     London City Airport	5	51.5048	0.058	3882
-    London Fields	352413	52.5133	-2.1112	3416
     London Gatwick Airport	352414	51.1511	-0.1768	3776
     London Luton Airport	352416	51.8746	-0.3708	3673
     London Southend Airport	352417	51.5696	0.6955	3691
     London Stansted Airport	352418	51.8832	0.2434	3683
-    Londonderry (Derry)	322472	54.9952	-7.3227	3683
-    Londonderry (West Midlands)	352419	52.4857	-1.9842	3534
     Londonolympic Park South	99203	51.534	-0.009	3779
     Lord's Marylebone C.C.	352438	51.5294	-0.1728	3779
     Loughton	352448	51.6555	0.0698	3779
@@ -857,7 +853,7 @@ def build_daily_window(window: int = 15) -> pd.DataFrame:
     for i, (station_name, meta) in enumerate(STATIONS.items(), 1):
         # ---------- status text with name + counter ----------
         status.text(
-            f"📆  Building daily means • {station_name}  ({i}/143)"
+            f"📆  Building daily means • {station_name}  ({i}/139)"
         )
 
         dfd = _open_meteo_daily(meta["lat"], meta["lon"], start, end)  # cached
@@ -1186,7 +1182,7 @@ with st.expander("📍 Station inventory", expanded=False):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# 📍 LIVE STATION MAP – 143 markers, spinner + progress bar, built once
+# 📍 LIVE STATION MAP – 139 markers, spinner + progress bar, built once
 # --------------------------------------------------------------------
 import pydeck as pdk
 
