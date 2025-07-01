@@ -16,6 +16,10 @@ from datetime import datetime, timedelta, date
 import matplotlib as mpl
 import time          # <-- add this
 from datetime import datetime, timedelta, date
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+CACHE_TTL   = 864_000          # 10 days in seconds
+MAX_WORKERS = 32               # threads to fire in parallel
 
 st.set_page_config(
     page_title="VPD Monitor",
@@ -388,23 +392,41 @@ total_stations = len(STATIONS)            # still used later
 # -----------------------------------------------------------------------------
 #  DATA FETCHERS – each returns a station-specific dataframe
 # -----------------------------------------------------------------------------
+@st.cache_data(persist="disk", ttl=CACHE_TTL, show_spinner=False)
+def _fetch_met_office_obs(dp_id: str, *, dev: bool = False) -> pd.DataFrame:
+    """
+    Hourly observations for a single Met-Office station.
+    
+    Parameters
+    ----------
+    dp_id : str
+        Met Office DataPoint site ID.
+    dev : bool, default False
+        If True return **all** rows; otherwise only rows for *today* up to `now`.
+    
+    Returns
+    -------
+    pd.DataFrame  with columns  ['time', 'vpd']
+    """
+    url = (f"http://datapoint.metoffice.gov.uk/public/data/val/wxobs/"
+           f"all/json/{dp_id}?res=hourly&key={API_KEY}")
 
-def _fetch_met_office_obs(dp_id: str, *, dev=False) -> pd.DataFrame:
-    url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxobs/all/json/{dp_id}?res=hourly&key={API_KEY}"
+    # ── 1. Fetch & basic parsing ─────────────────────────────────────
     try:
-        raw = requests.get(url, timeout=10).json()
-        periods = raw["SiteRep"]["DV"]["Location"].get("Period", [])
-        if isinstance(periods, dict):
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        js = r.json()
+        periods = js["SiteRep"]["DV"]["Location"].get("Period", [])
+        if isinstance(periods, dict):        # API returns a dict for “today”
             periods = [periods]
-    except Exception:
+    except Exception:                        # network, JSON, key errors …
         return pd.DataFrame(columns=["time", "vpd"])
 
+    # ── 2. Build rows (optionally filter for today) ──────────────────
     today = date.today()
     now   = datetime.now()
 
-    all_rows   = []         # <- keep everything
-    filtered   = []         # <- keep only rows you normally use
-
+    all_rows, today_rows = [], []
     for p in periods:
         base = datetime.strptime(p["value"], "%Y-%m-%dZ")
         for rep in p.get("Rep", []):
@@ -414,15 +436,20 @@ def _fetch_met_office_obs(dp_id: str, *, dev=False) -> pd.DataFrame:
             t, h = rep.get("T"), rep.get("H")
             if t is None or h is None:
                 continue
-            vpd_val = calculate_vpd(float(t), float(h))
-            all_rows.append({"time": ts, "vpd": vpd_val})
-            # original filter
+            try:
+                vpd_val = calculate_vpd(float(t), float(h))
+            except ValueError:               # non-numeric strings, etc.
+                continue
+
+            rec = {"time": ts, "vpd": vpd_val}
+            all_rows.append(rec)
             if ts.date() == today and ts <= now:
-                filtered.append({"time": ts, "vpd": vpd_val})
+                today_rows.append(rec)
 
-    return pd.DataFrame(all_rows if dev else filtered)
+    return pd.DataFrame(all_rows if dev else today_rows)
 
 
+@st.cache_data(persist="disk", ttl=CACHE_TTL, show_spinner=False)
 def _fetch_met_office_fcst(dp_id: str) -> pd.DataFrame:
     """3‑hourly forecast for up to MAX_FORECAST_DAYS ahead for one station."""
     url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/all/json/{dp_id}?res=3hourly&key={API_KEY}"
@@ -456,6 +483,7 @@ def _fetch_met_office_fcst(dp_id: str) -> pd.DataFrame:
     return pd.DataFrame(recs)
 
 
+@st.cache_data(persist="disk", ttl=CACHE_TTL, show_spinner=False)
 def _fetch_open_meteo(lat: float, lon: float, day: date) -> pd.DataFrame:
     """Fetch historical data from Open-Meteo for one station."""
     url = "https://archive-api.open-meteo.com/v1/archive"
@@ -472,7 +500,7 @@ def _fetch_open_meteo(lat: float, lon: float, day: date) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame(columns=["time", "vpd"])
     df = pd.DataFrame({
-        "time": pd.to_datetime(hourly.get("time", [])),
+        "time": pd.to_datetime(hourly.get("time", [])), 
         "temperature": hourly.get("temperature_2m", []),
         "humidity": hourly.get("relativehumidity_2m", []),
     })
@@ -480,6 +508,7 @@ def _fetch_open_meteo(lat: float, lon: float, day: date) -> pd.DataFrame:
     return df[["time", "vpd"]]
 
 
+@st.cache_data(persist="disk", ttl=CACHE_TTL, show_spinner=False)
 def _fill_with_meteostat(df: pd.DataFrame, meta_id: str, day: date) -> pd.DataFrame:
     """Replace any missing hours (or the entire day) using Meteostat."""
     if not METEOSTAT_AVAILABLE or not meta_id:
@@ -512,6 +541,7 @@ def _fill_with_meteostat(df: pd.DataFrame, meta_id: str, day: date) -> pd.DataFr
 # -------------------------------------------------------------------------
 #  HELPERS THAT RETURN *FULL* ROWS (time, temp, rh, vpd)  – per station
 # -------------------------------------------------------------------------
+@st.cache_data(persist="disk", ttl=CACHE_TTL, show_spinner=False)
 def _met_office_fcst_full(dp_id: str) -> pd.DataFrame:
     """Met Office 3-hourly forecast with raw T & RH as well as VPD."""
     url = (f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/"
@@ -538,6 +568,7 @@ def _met_office_fcst_full(dp_id: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@st.cache_data(persist="disk", ttl=CACHE_TTL, show_spinner=False)
 def _met_office_obs_full(dp_id: str) -> pd.DataFrame:
     """Met Office *observations* (hourly) with raw T & RH + VPD."""
     url = (f"http://datapoint.metoffice.gov.uk/public/data/val/wxobs/"
@@ -564,69 +595,91 @@ def _met_office_obs_full(dp_id: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@st.cache_data(persist="disk", ttl=CACHE_TTL, show_spinner=False)
 def _open_meteo_full(lat: float, lon: float, day: date) -> pd.DataFrame:
-    """Open-Meteo archive with raw T & RH + VPD (one historical day)."""
+    """
+    Historical **one-day** archive from Open-Meteo (T °C & RH %) → VPD Pa.
+
+    Returns an empty dataframe when the API is unreachable or the day is
+    incomplete – the caller then decides whether to fall back to Meteostat.
+    """
     url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
-        "latitude":  lat,
-        "longitude": lon,
+        "latitude":   lat,
+        "longitude":  lon,
         "start_date": day.isoformat(),
         "end_date":   day.isoformat(),
         "hourly":     "temperature_2m,relativehumidity_2m",
         "timezone":   "Europe/London",
     }
-    try:
-        hr = requests.get(url, params=params, timeout=10).json()["hourly"]
-    except Exception:
-        return pd.DataFrame()                          # network / JSON error
 
-    # If either variable is missing altogether → force fallback
-    if "relativehumidity_2m" not in hr or "temperature_2m" not in hr:
-        return pd.DataFrame()
+    # ── 1. fetch & basic validation ──────────────────────────────────
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        hr = r.json().get("hourly", {})
+    except Exception:                           # network / JSON / 4xx 5xx …
+        return pd.DataFrame(columns=["time", "vpd"])
+
+    if "temperature_2m" not in hr or "relativehumidity_2m" not in hr:
+        return pd.DataFrame(columns=["time", "vpd"])    # no useful data
+
+    # ── 2. build dataframe & clean ───────────────────────────────────
+    df = pd.DataFrame()
+    _time = pd.to_datetime(hr["time"])
+    try:                                 # if it’s TZ-aware, drop it
+        _time = _time.tz_localize(None)
+    except TypeError:                    # already naive → nothing to do
+        pass
 
     df = pd.DataFrame({
-        "time":        pd.to_datetime(hr["time"]),
+        "time": _time,
         "temperature": hr["temperature_2m"],
         "humidity":    hr["relativehumidity_2m"],
     })
 
-    # Throw away rows with *either* value missing – they’ll be filled later
+    # Drop rows lacking T or RH (they’ll be filled by Meteostat later)
     df = df.dropna(subset=["temperature", "humidity"])
     if df.empty:
-        return df                                       # triggers Meteostat
+        return df                           # triggers caller’s fallback
 
-    df["vpd"] = calculate_vpd(df["temperature"], df["humidity"])
-    return df[["time", "vpd"]]
+    # ── 3. VPD calculation ───────────────────────────────────────────
+    df["vpd"] = calculate_vpd(df["temperature"].astype(float),
+                              df["humidity"].astype(float))
+
+    return df[["time", "vpd"]].reset_index(drop=True)
+
 
 @st.cache_data(show_spinner=True, ttl=1800, max_entries=10)
 def gather_station_day(day: date) -> pd.DataFrame:
-    """
-    Return a dataframe with one row per *station-timestamp* containing:
-        station • time • temperature • humidity • vpd
-    Falls back to Open-Meteo/Meteostat for history, uses forecast for future.
-    """
-    frames = []
-    for name, meta in STATIONS.items():
-        dp_id, lat, lon, meta_id = (meta["dp_id"], meta["lat"],
-                                    meta["lon"], meta["meta_id"])
+    """Return raw per-station rows (time · temp · RH · VPD) – parallel."""
+    def _one(meta: dict) -> pd.DataFrame:
+        dp_id, lat, lon, meta_id = meta["dp_id"], meta["lat"], meta["lon"], meta["meta_id"]
         if   day > date.today():
             df = _met_office_fcst_full(dp_id)
         elif day == date.today():
-            # prefer obs but they arrive hourly – still include partial rows
             df = _met_office_obs_full(dp_id)
-            if df.empty:                       # obs not in yet → forecast
+            if df.empty:
                 df = _met_office_fcst_full(dp_id)
         else:
             df = _open_meteo_full(lat, lon, day)
             df = _fill_with_meteostat(df, meta_id, day)
+        return df[df["time"].dt.date == day] if not df.empty else df
 
-        if not df.empty:
-            df["station"] = name
-            frames.append(df[df["time"].dt.date == day])
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(_one, m): n for n, m in STATIONS.items()}
+        frames  = []
+        for fut in as_completed(futures):
+            name = futures[fut]
+            df   = fut.result()
+            if not df.empty:
+                df["station"] = name
+                frames.append(df)
 
-    return (pd.concat(frames, ignore_index=True)
-              if frames else pd.DataFrame(columns=[
-                  "station", "time", "temperature", "humidity", "vpd"]))
+    if frames:
+        return pd.concat(frames, ignore_index=True)
+    return pd.DataFrame(columns=["station", "time", "temperature", "humidity", "vpd"])
+
 
 
 
@@ -634,61 +687,48 @@ def gather_station_day(day: date) -> pd.DataFrame:
 #  PUBLIC FETCH API - NOW USES ALL STATIONS WITH ENHANCED LOADING MESSAGES
 # -----------------------------------------------------------------------------
 
-def fetch_forecast(*, quiet: bool = False) -> tuple[pd.DataFrame, int]:    
-    """Fetch forecast data from ALL London stations and return averaged data + station count."""
-    all_dfs = []
-    successful_stations = 0
-    
-    if not quiet:                       # ← wrap the widgets
-        progress_bar = st.progress(0)
-        status_text  = st.empty()
-    
-    total_stations = len(STATIONS)
-    
-    for i, (station_name, station_info) in enumerate(STATIONS.items()):
-        # Update progress
-        progress = i / total_stations
-        if not quiet:
-            progress_bar.progress(progress)
-            status_text.text(f"🔮 Fetching … {station_name} …")
-        
-        df = _fetch_met_office_fcst(station_info["dp_id"])
-        if not df.empty:
-            df["station"] = station_name
-            all_dfs.append(df)
-            successful_stations += 1
-    
-    # Complete progress
-    if not quiet:
-        progress_bar.progress(1.0)
-        status_text.text("✅ Forecast done")
-        time.sleep(0.8)
-        progress_bar.empty()
-        status_text.empty()
-    
-    # Clear progress indicators
-    time.sleep(1)
-    if not quiet:
-        progress_bar.empty()
-        status_text.empty()
+def fetch_forecast(*, quiet: bool = False) -> tuple[pd.DataFrame, int]:
+    all_dfs, ok = [], 0                         # ← counter is called ok
+    total = len(STATIONS)
 
-    if not all_dfs:
+    if not quiet:
+        prog   = st.progress(0.0)
+        status = st.empty()
+
+    # ── PARALLEL ─────────────────────────────────────────────────────
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {
+            ex.submit(_fetch_met_office_fcst, meta["dp_id"]): name
+            for name, meta in STATIONS.items()
+        }
+        for n, fut in enumerate(as_completed(futures), 1):
+            name = futures[fut]
+            df   = fut.result()
+            if not df.empty:
+                df["station"] = name
+                all_dfs.append(df)
+                ok += 1                       # ← increment the same counter
+            if not quiet:
+                prog.progress(n / total)
+                status.text(f"🔮  {n}/{total}  {name}")
+
+    if not quiet:
+        prog.empty(); status.empty()
+
+    if not all_dfs:                           # nothing succeeded
         return pd.DataFrame(columns=["time", "vpd"]), 0
-    
-    # Combine all station data
+
     combined = pd.concat(all_dfs, ignore_index=True)
-    
-    # Calculate average VPD per timestamp
-    time_groups = combined.groupby("time")
-    averaged_data = []
-    
-    for time_val, group in time_groups:
-        if len(group) >= min_stations:
-            avg_vpd = group["vpd"].mean()
-            averaged_data.append({"time": time_val, "vpd": avg_vpd, "station_count": len(group)})
-    
-    result_df = pd.DataFrame(averaged_data)
-    return result_df, successful_stations
+
+    averaged = (
+        combined.groupby("time")
+                .filter(lambda g: len(g) >= min_stations)
+                .groupby("time")["vpd"]
+                .mean()
+                .reset_index()
+    )
+
+    return averaged, ok
 
 @st.cache_data(ttl=1800, show_spinner=True)
 def fetch_today_predicted() -> tuple[pd.DataFrame, int]:
@@ -705,58 +745,55 @@ def fetch_today_predicted() -> tuple[pd.DataFrame, int]:
     return today_df, ok_stations
 
 def fetch_historical(day: date, *, quiet: bool = False) -> tuple[pd.DataFrame, int]:
-    """Historical (or today’s obs) averaged across all stations."""
-    all_dfs, successful = [], 0
-
-    if not quiet:                      # widgets only if not “quiet”
-        progress_bar = st.progress(0)
-        status_text  = st.empty()
-
-    total_stations = len(STATIONS)
-
-    for i, (name, info) in enumerate(STATIONS.items()):
-        frac = i / total_stations
-        if not quiet:
-            progress_bar.progress(frac)
-            status_text.text(f"📚  {day} • {name} ({i+1}/{total_stations})")
-
-        lat, lon, meta_id = info["lat"], info["lon"], info["meta_id"]
-
-        # ────────────────────────────────
-        # NEW: use Met-Office OBS for *today*
-        # ────────────────────────────────
-        if day == date.today():
-            df = _fetch_met_office_obs(info["dp_id"])
-            if df.empty:                               # fallback if a site has no obs yet
-                df = _open_meteo_full(lat, lon, day)
-        else:
-            df = _open_meteo_full(lat, lon, day)
-            df = _fill_with_meteostat(df, meta_id, day)
-
-        if not df.empty:
-            df["station"] = name
-            all_dfs.append(df)
-            successful += 1
+    """Historical (or today’s obs) averaged across all stations – parallel."""
+    total = len(STATIONS)
+    all_dfs, ok = [], 0
 
     if not quiet:
-        progress_bar.progress(1.0)
-        status_text.text("✅  Historical done")
-        time.sleep(0.8)
-        progress_bar.empty()
-        status_text.empty()
+        prog   = st.progress(0.0)
+        status = st.empty()
+
+    def _one_station(name: str, meta: dict) -> pd.DataFrame:
+        dp_id, lat, lon, meta_id = meta["dp_id"], meta["lat"], meta["lon"], meta["meta_id"]
+
+        if   day > date.today():                              # future → forecast
+            df = _met_office_fcst_full(dp_id)
+        elif day == date.today():                             # today → obs→fcst fallback
+            df = _fetch_met_office_obs(dp_id)
+            if df.empty:
+                df = _open_meteo_full(lat, lon, day)
+        else:                                                 # past
+            df = _open_meteo_full(lat, lon, day)
+            df = _fill_with_meteostat(df, meta_id, day)
+        if not df.empty:
+            df["station"] = name
+        return df
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(_one_station, n, m): n for n, m in STATIONS.items()}
+        for i, fut in enumerate(as_completed(futures), 1):
+            name = futures[fut]
+            df   = fut.result()
+            if not df.empty:
+                all_dfs.append(df)
+                ok += 1
+            if not quiet:
+                prog.progress(i/total); status.text(f"📚  {day} • {i}/{total}  {name}")
+
+    if not quiet:
+        prog.empty(); status.empty()
 
     if not all_dfs:
         return pd.DataFrame(columns=["time", "vpd"]), 0
 
     combined = pd.concat(all_dfs, ignore_index=True)
-    mean_rows = (
-        combined.groupby("time")
-                .filter(lambda g: len(g) >= min_stations)
-                .groupby("time")["vpd"]
-                .mean()
-                .reset_index()
-    )
-    return mean_rows, successful
+    averaged = (combined.groupby("time")
+                        .filter(lambda g: len(g) >= min_stations)
+                        .groupby("time")["vpd"]
+                        .mean()
+                        .reset_index())
+    return averaged, ok
+
 
 def _blend_to_hour_grid(obs_df: pd.DataFrame,
                         fcst_df: pd.DataFrame) -> pd.Series:
@@ -794,6 +831,7 @@ def _blend_to_hour_grid(obs_df: pd.DataFrame,
 
 
 # ---------- new compact helper ------------------------------------
+@st.cache_data(persist="disk", ttl=CACHE_TTL, show_spinner=False)
 def _open_meteo_daily(lat: float, lon: float,
                       start: date, end: date) -> pd.DataFrame:
     """
@@ -832,67 +870,57 @@ def _open_meteo_daily(lat: float, lon: float,
 # 1️⃣  NEW helper – identical maths, but shows a progress bar while it runs
 ###############################################################################
 def build_daily_window(window: int = 15) -> pd.DataFrame:
-    """
-    Same result as gather_daily_window(), but with a visible progress bar.
-    Runtime-heavy calls to _open_meteo_daily() are still cached, so the
-    progress bar appears instantly after the first run.
-    """
-    # visual widgets
-    progress = st.progress(0.0)
-    status   = st.empty()
+    """Daily means window (9 past + today + future) – parallel first step."""
+    progress = st.progress(0.0); status = st.empty()
 
     today   = date.today()
-    past    = 9                    # 9 past + today + future = window
+    past    = 9
     future  = window - past - 1
     start   = today - timedelta(days=past)
     end     = today + timedelta(days=future)
 
+    def _om_call(meta: dict) -> pd.DataFrame:
+        return _open_meteo_daily(meta["lat"], meta["lon"], start, end)
+
     per_station = []
-    total = len(STATIONS)*(1/0.9)
+    total = len(STATIONS)
 
-    for i, (station_name, meta) in enumerate(STATIONS.items(), 1):
-        # ---------- status text with name + counter ----------
-        status.text(
-            f"📆  Building daily means • {station_name}  ({i}/139)"
-        )
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(_om_call, m): n for n, m in STATIONS.items()}
+        for i, fut in enumerate(as_completed(futures), 1):
+            name = futures[fut]
+            dfd  = fut.result()
+            if not dfd.empty:
+                per_station.append(dfd.assign(station=1))
+            progress.progress(i/total * 0.90)          # reserve 10 % for next steps
+            status.text(f"📆  Daily means • {i}/{total}  {name}")
 
-        dfd = _open_meteo_daily(meta["lat"], meta["lon"], start, end)  # cached
-        if not dfd.empty:
-            per_station.append(dfd.assign(station=1))
+    joined = (pd.concat(per_station, ignore_index=True)
+              if per_station else pd.DataFrame())
+    ok = joined.groupby("date").filter(lambda x: x["station"].count() >= min_stations)
 
-        progress.progress(i / total)
-    
-    joined = pd.concat(per_station, ignore_index=True) if per_station else pd.DataFrame()
-    ok = joined.groupby("date").filter(lambda x: x["station"].count() >= min_stations)  
+    # --- inject today's blended mean (unchanged) -------------------
+    progress.progress(0.90); status.text("📡  Observations …")
+    obs_today, _ = fetch_historical(today, quiet=True)
 
-    # ── B. Met-Office *OBS* for today  (quiet) ─────────────────
-    progress.progress(0.90)
-    status.text("📡  Pulling today’s observations …")
-    obs_today, _ = fetch_historical(date.today(), quiet=True)
-
-    # ── C. Met-Office *FORECAST* for today  (quiet) ───────────
-    status.text("🔮  Pulling today’s forecast …")
+    status.text("🔮  Forecast …")
     fc_today, _  = fetch_forecast(quiet=True)
-    fc_today     = fc_today[fc_today["time"].dt.date == date.today()]
+    fc_today     = fc_today[fc_today["time"].dt.date == today]
     progress.progress(1.00)
 
-    # ── D. Blend & inject today’s mean ─────────────────────────
     hourly_today = _blend_to_hour_grid(obs_today, fc_today)
     if not hourly_today.empty:
-        ok = ok[ok["date"] != date.today()]           # drop any placeholder
-        today_row = pd.DataFrame([{
-            "date": date.today(),
-            "vpd":  hourly_today.mean()              # correct 24-hour mean
-        }])
-        ok = pd.concat([ok, today_row], ignore_index=True)
+        ok = ok[ok["date"] != today]
+        ok = pd.concat(
+            [ok,
+             pd.DataFrame([{"date": today, "vpd": hourly_today.mean()}])],
+            ignore_index=True
+        )
 
-    # ── tidy up widgets ────────────────────────────────────────
     progress.empty(); status.empty()
+    return (ok.groupby("date")["vpd"].mean()
+              .reset_index().sort_values("date"))
 
-    return (ok.groupby("date")["vpd"]
-              .mean()
-              .reset_index()
-              .sort_values("date"))
 
 @st.cache_resource
 def _daily_overview_fig(daily_df, dark):
