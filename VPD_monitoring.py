@@ -308,7 +308,6 @@ _STATION_TSV = textwrap.dedent("""\
     London Biggin Hill Airport	352411	51.3264	0.0322	3882
     London City Airport	5	51.5048	0.058	3882
     London Gatwick Airport	352414	51.1511	-0.1768	3776
-    London Luton Airport	352416	51.8746	-0.3708	3673
     London Southend Airport	352417	51.5696	0.6955	3691
     London Stansted Airport	352418	51.8832	0.2434	3683
     Londonolympic Park South	99203	51.534	-0.009	3779
