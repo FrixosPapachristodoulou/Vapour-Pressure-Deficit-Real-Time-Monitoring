@@ -239,7 +239,6 @@ _STATION_TSV = textwrap.dedent("""\
     Bexley	350413	51.4414	0.1487	3781
     Biggin Hill	350426	51.3116	0.0344	3781
     Borehamwood	350516	51.6573	-0.2707	3781
-    Brands Hatch	350571	51.3554	0.2636	3781
     Bromley (Greater London)	350635	51.4056	0.0148	3781
     Bromley Ski Centre	350638	51.405	0.1278	3781
     Bushey	350694	51.6472	-0.3569	3781
@@ -295,7 +294,6 @@ _STATION_TSV = textwrap.dedent("""\
     Ilford	351996	51.5562	0.0779	3779
     Islington	352036	51.5353	-0.102	3779
     Kempton Park Racecourse	352068	51.4182	-0.3963	3772
-    Kemsing	352069	51.3067	0.2503	3772
     Kenley	3781	51.303	-0.09	3781
     Kensington	352075	51.5015	-0.1962	3779
     Kew Gardens	99095	51.482	-0.29	3772
@@ -307,9 +305,6 @@ _STATION_TSV = textwrap.dedent("""\
     London  Olympic Park North	99204	51.542	-0.017	3779
     London Biggin Hill Airport	352411	51.3264	0.0322	3882
     London City Airport	5	51.5048	0.058	3882
-    London Gatwick Airport	352414	51.1511	-0.1768	3776
-    London Southend Airport	352417	51.5696	0.6955	3691
-    London Stansted Airport	352418	51.8832	0.2434	3683
     Londonolympic Park South	99203	51.534	-0.009	3779
     Lord's Marylebone C.C.	352438	51.5294	-0.1728	3779
     Loughton	352448	51.6555	0.0698	3779
