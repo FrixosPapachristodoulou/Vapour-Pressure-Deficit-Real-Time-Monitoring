@@ -42,8 +42,6 @@ except ImportError:
     METEOSTAT_AVAILABLE = False
 
 # =====================================================
-#                  ✨  LOOK & FEEL  ✨
-# =====================================================
 ACCENT = "#34a853"  # Define early
 st.markdown(
     """
@@ -1527,3 +1525,4 @@ st.markdown(
     ),
     unsafe_allow_html=True,
 )
+
