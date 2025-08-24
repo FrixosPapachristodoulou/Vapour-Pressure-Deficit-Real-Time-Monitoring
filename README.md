@@ -21,7 +21,7 @@ The app integrates multiple data sources (Met Office DataPoint, Open-Meteo, Mete
   - A banner highlights fire-risk in real-time.
 
 - **Daily VPD Overview (15-day window)**  
-  - Combines **past, present, and future** into one elegant chart.  
+  - Combines **past, present, and future** into one chart.  
   - Inline legends (“Historical” / “Forecast”), with a **halo marker for Today**.
 
 - **Hourly VPD Plot**  
