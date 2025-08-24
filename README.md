@@ -76,7 +76,7 @@ def calculate_vpd(temp, rh):
 
 ## Parallel Fetching
 
-Fetching data from ~142 London stations per request is computationally heavy.  
+Fetching data from ~133 London stations per request is computationally heavy.  
 To achieve interactive speeds, the app uses **`concurrent.futures.ThreadPoolExecutor`** with up to **32 workers** to query APIs **concurrently**.  
 
 ```python
